@@ -95,23 +95,6 @@ Our comprehensive architecture documentation is **92% complete** and production-
 - 🔄 Session persistence and cloud sync
 - 🔄 Basic preset management system
 
-## 🎯 Target Users
-
-### Primary: ADHD Creatives (18-35)
-
-Creative professionals and freelancers with diagnosed or self-identified ADHD who:
-- Work in design, content creation, development, or artistic fields
-- Struggle with task initiation and sustained focus
-- Value creative expression and visual thinking
-- Have abandoned traditional productivity tools
-
-### Secondary: Neurodivergent Professionals (25-45)
-
-Established professionals who have developed coping mechanisms but seek:
-- Structured support that enhances existing workflows
-- Advanced analytics and productivity optimization
-- Premium tools that genuinely address neurodivergent needs
-
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -250,7 +233,7 @@ We welcome contributions from the community! Please see our [Contributing Guide]
 
 ### Development Workflow
 
-1. Fork the repository
+1. Clone the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
@@ -266,12 +249,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **BMAD™ Core**: For providing the development framework and agent ecosystem
 - **Open Source Community**: For the amazing tools and libraries that make this project possible
 
-## 📞 Contact
-
-- **Project Creator**: [Your Name]
-- **Twitter**: [@your-twitter]
-- **Discord**: [Join our community]
-- **Website**: [dopamine-hero.com](https://dopamine-hero.com)
 
 ---
 
