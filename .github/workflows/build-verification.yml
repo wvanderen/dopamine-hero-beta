@@ -1,0 +1,63 @@
+name: Build Verification
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  build-verification:
+    name: Multi-Package Build Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared package
+        run: |
+          cd packages/shared
+          npm run build
+
+      - name: Build UI package
+        run: |
+          cd packages/ui
+          npm run build
+
+      - name: Build config package
+        run: |
+          cd packages/config
+          npm run build
+
+      - name: Build API application
+        run: |
+          cd apps/api
+          npm run build
+
+      - name: Build Web application
+        run: |
+          cd apps/web
+          npm run build
+
+      - name: Verify build outputs exist
+        run: |
+          # Check if build outputs exist
+          [ -d "packages/shared/dist" ] || (echo "❌ Shared package build failed" && exit 1)
+          [ -d "packages/ui/dist" ] || (echo "❌ UI package build failed" && exit 1)
+          [ -d "packages/config/dist" ] || (echo "❌ Config package build failed" && exit 1)
+          [ -d "apps/api/dist" ] || (echo "❌ API application build failed" && exit 1)
+          [ -d "apps/web/dist" ] || (echo "❌ Web application build failed" && exit 1)
+          echo "✅ All packages and applications built successfully!"
+
+      - name: Run TypeScript project references check
+        run: npx tsc --build --verbose

@@ -1,0 +1,146 @@
+name: Deployment Approval Workflow
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+jobs:
+  prepare-deployment:
+    name: Prepare Deployment
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run pre-deployment checks
+        run: |
+          echo "🔍 Running pre-deployment checks..."
+
+          # Full test suite
+          npm run test:coverage || (echo "❌ Tests failed" && exit 1)
+
+          # Build verification
+          npm run build || (echo "❌ Build failed" && exit 1)
+
+          # Security audit
+          npm audit --audit-level=moderate || echo "⚠️ Security vulnerabilities found - review required"
+
+          echo "✅ Pre-deployment checks completed"
+
+      - name: Create deployment ticket
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const repo = context.repo;
+
+            // Create deployment issue (placeholder for actual issue creation)
+            const issueTitle = `🚀 Deployment Request: ${pr.title}`;
+            const issueBody = `
+            ## Deployment Request
+
+            **PR:** #${pr.number} - ${pr.title}
+            **Branch:** ${pr.head.ref}
+            **Merge Commit:** ${pr.merge_commit_sha}
+
+            ### Changes Summary
+            ${pr.body || 'No description provided'}
+
+            ### Pre-deployment Checklist
+            - [ ] All tests passing
+            - [ ] Build successful
+            - [ ] Security audit reviewed
+            - [ ] Documentation updated (if required)
+            - [ ] Rollback plan prepared
+
+            ### Deployment Details
+            - **Target Environment:** Staging
+            - **Requested by:** ${pr.user.login}
+            - **Approval required:** Yes
+
+            ### Approval Process
+            1. Review the changes and pre-deployment checklist
+            2. Add approval comment below
+            3. Deployment will proceed automatically after approval
+            `;
+
+            console.log('Deployment request created:');
+            console.log(`Title: ${issueTitle}`);
+            console.log(`Body:\n${issueBody}`);
+
+      - name: Trigger staging deployment
+        if: contains(github.event.pull_request.labels.*.name, 'auto-deploy')
+        run: |
+          echo "🚀 Auto-deploy label detected - triggering staging deployment"
+          # This would trigger the staging deployment workflow
+          echo "Staging deployment initiated"
+
+  request-production-approval:
+    name: Request Production Deployment
+    runs-on: ubuntu-latest
+    needs: prepare-deployment
+    if: contains(github.event.pull_request.labels.*.name, 'production-ready')
+
+    steps:
+      - name: Create production deployment request
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+
+            const deploymentRequest = {
+              title: `🏭 Production Deployment Request: ${pr.title}`,
+              body: `
+              ## Production Deployment Request
+
+              **PR:** #${pr.number} - ${pr.title}
+              **Requested by:** ${pr.user.login}
+              **Date:** ${new Date().toISOString()}
+
+              ### Deployment Information
+              - **Source:** ${pr.head.ref} → main
+              - **Commit:** ${pr.merge_commit_sha}
+              - **Changes:** ${pr.changed_files} files modified
+
+              ### Requirements for Production Deployment
+              - [ ] Code has been tested in staging environment
+              - [ ] All quality gates passed
+              - [ ] Security audit completed
+              - [ ] Performance tests passed
+              - [ ] Documentation updated
+              - [ ] Monitoring and alerting configured
+              - [ ] Rollback plan documented
+
+              ### Approval Required
+              This deployment requires approval from at least 2 maintainers.
+
+              ### Approval Process
+              1. Review the deployment checklist above
+              2. Comment "Approved for production" to approve
+              3. Deployment will proceed after receiving required approvals
+              `,
+              labels: ['deployment-request', 'production']
+            };
+
+            console.log('Production deployment request created');
+            console.log(`Title: ${deploymentRequest.title}`);
+
+      - name: Notify team
+        run: |
+          echo "📢 Production deployment approval requested"
+          echo "👥 Approval required from project maintainers"
+          echo "📋 Please review the deployment request and provide approval"

@@ -1,0 +1,150 @@
+name: Pull Request Validation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  pr-validation:
+    name: PR Validation Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run all validation checks
+        run: |
+          echo "🔍 Running comprehensive PR validation..."
+
+          # 1. Code formatting check
+          echo "1️⃣ Checking code formatting..."
+          npm run format:check || (echo "❌ Code formatting issues found - run 'npm run format:fix'" && exit 1)
+
+          # 2. Linting check
+          echo "2️⃣ Running ESLint..."
+          npm run lint || (echo "❌ ESLint errors found" && exit 1)
+
+          # 3. TypeScript compilation
+          echo "3️⃣ Running TypeScript type check..."
+          npm run type-check || (echo "❌ TypeScript errors found" && exit 1)
+
+          # 4. Unit tests
+          echo "4️⃣ Running unit tests..."
+          npm run test || (echo "❌ Unit tests failed" && exit 1)
+
+          # 5. Test coverage
+          echo "5️⃣ Checking test coverage..."
+          npm run test:coverage || (echo "❌ Test coverage check failed" && exit 1)
+
+          # 6. Build verification
+          echo "6️⃣ Running build verification..."
+          npm run build || (echo "❌ Build failed" && exit 1)
+
+          echo "✅ All PR validation checks passed!"
+
+      - name: Check for breaking changes
+        run: |
+          echo "🚨 Checking for breaking changes..."
+
+          # Check for changes that might be breaking
+          CHANGED_FILES=$(git diff --name-only origin/main...HEAD)
+
+          BREAKING_PATTERNS=(
+            "package.json"
+            "tsconfig.json"
+            ".eslintrc"
+            "docker-compose.yml"
+            ".github/workflows/"
+          )
+
+          BREAKING_CHANGE=false
+
+          for file in $CHANGED_FILES; do
+            for pattern in "${BREAKING_PATTERNS[@]}"; do
+              if [[ "$file" == *"$pattern"* ]]; then
+                echo "⚠️ Potentially breaking change detected in: $file"
+                BREAKING_CHANGE=true
+              fi
+            done
+          done
+
+          if [[ "$BREAKING_CHANGE" == "true" ]]; then
+            echo "📝 Review changes carefully as they may affect the entire project"
+          else
+            echo "✅ No obvious breaking changes detected"
+          fi
+
+      - name: Validate PR description
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            const description = pr.body || '';
+
+            // Check for required sections in PR description
+            const requiredSections = ['## Changes', '## Testing', '## Checklist'];
+            const missingSections = requiredSections.filter(section =>
+              !description.includes(section)
+            );
+
+            if (missingSections.length > 0) {
+              console.log(`❌ PR description missing required sections: ${missingSections.join(', ')}`);
+              console.log('Please include: ## Changes, ## Testing, ## Checklist');
+              process.exit(1);
+            }
+
+            console.log('✅ PR description validation passed');
+
+      - name: Size analysis
+        run: |
+          echo "📊 Analyzing PR size..."
+
+          # Count lines changed
+          LINES_ADDED=$(git diff --numstat origin/main...HEAD | awk '{sum += $1} END {print sum}')
+          LINES_DELETED=$(git diff --numstat origin/main...HEAD | awk '{sum += $2} END {print sum}')
+          FILES_CHANGED=$(git diff --name-only origin/main...HEAD | wc -l)
+
+          echo "Files changed: $FILES_CHANGED"
+          echo "Lines added: $LINES_ADDED"
+          echo "Lines deleted: $LINES_DELETED"
+
+          # Warn for large PRs
+          if [[ $FILES_CHANGED -gt 50 ]]; then
+            echo "⚠️ Large PR detected ($FILES_CHANGED files). Consider splitting into smaller PRs."
+          fi
+
+          if [[ $LINES_ADDED -gt 1000 ]]; then
+            echo "⚠️ Many lines added ($LINES_ADDED). Ensure code is well-documented and tested."
+          fi
+
+      - name: Notify PR status
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const status = context.payload.workflow_run?.conclusion || '${{ job.status }}';
+            const message = status === 'success'
+              ? '🎉 All validation checks passed! This PR is ready for review.'
+              : '❌ Validation checks failed. Please review the logs and fix the issues.';
+
+            // Comment on PR (would need appropriate permissions)
+            console.log(message);

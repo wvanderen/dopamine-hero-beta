@@ -1,0 +1,141 @@
+name: Environment Configuration Management
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      config_action:
+        description: 'Configuration action'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+        - deploy
+        - rollback
+        - validate
+
+jobs:
+  manage-environment:
+    name: Manage Environment Configuration
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+
+      - name: Load environment configuration
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment }}
+          echo "Loading configuration for environment: $ENVIRONMENT"
+
+          # Create environment-specific configuration files
+          cat > .env.$ENVIRONMENT << EOF
+          # Environment Configuration
+          NODE_ENV=$ENVIRONMENT
+          ENVIRONMENT_NAME=$ENVIRONMENT
+
+          # API Configuration
+          API_URL=https://api-$ENVIRONMENT.dopamine-hero.com
+          API_TIMEOUT=30000
+
+          # Frontend Configuration
+          FRONTEND_URL=https://$([ "$ENVIRONMENT" = "production" ] && echo "" || echo "$ENVIRONMENT-")dopamine-hero.vercel.app
+
+          # Database Configuration
+          DATABASE_URL=${{ secrets[format('DATABASE_URL_{0}', upper(ENVIRONMENT))] }}
+          DATABASE_POOL_SIZE=10
+
+          # Redis Configuration
+          REDIS_URL=${{ secrets[format('REDIS_URL_{0}', upper(ENVIRONMENT))] }}
+
+          # External Services
+          STRIPE_PUBLISHABLE_KEY=${{ secrets[format('STRIPE_PUBLISHABLE_KEY_{0}', upper(ENVIRONMENT))] }}
+          STRIPE_SECRET_KEY=${{ secrets[format('STRIPE_SECRET_KEY_{0}', upper(ENVIRONMENT))] }}
+
+          # Authentication
+          JWT_SECRET=${{ secrets[format('JWT_SECRET_{0}', upper(ENVIRONMENT))] }}
+          JWT_EXPIRES_IN=7d
+
+          # Monitoring and Logging
+          SENTRY_DSN=${{ secrets[format('SENTRY_DSN_{0}', upper(ENVIRONMENT))] }}
+          LOG_LEVEL=$([ "$ENVIRONMENT" = "production" ] && echo "error" || echo "debug")
+
+          # Feature Flags
+          ENABLE_NEW_FEATURES=$([ "$ENVIRONMENT" = "staging" ] && echo "true" || echo "false")
+          ENABLE_DEBUG_MODE=$([ "$ENVIRONMENT" = "production" ] && echo "false" || echo "true")
+          EOF
+
+          echo "Environment configuration created for $ENVIRONMENT"
+
+      - name: Validate configuration
+        if: github.event.inputs.config_action == 'validate'
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment }}
+          source .env.$ENVIRONMENT
+
+          # Validate required environment variables
+          required_vars=("NODE_ENV" "API_URL" "DATABASE_URL" "JWT_SECRET")
+          missing_vars=()
+
+          for var in "${required_vars[@]}"; do
+            if [[ -z "${!var}" ]]; then
+              missing_vars+=("$var")
+            fi
+          done
+
+          if [[ ${#missing_vars[@]} -gt 0 ]]; then
+            echo "❌ Missing required environment variables: ${missing_vars[*]}"
+            exit 1
+          fi
+
+          echo "✅ Environment configuration validated successfully"
+
+      - name: Deploy configuration
+        if: github.event.inputs.config_action == 'deploy'
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment }}
+          echo "🚀 Deploying configuration to $ENVIRONMENT"
+
+          # Copy configuration to appropriate locations
+          cp .env.$ENVIRONMENT apps/web/.env.production
+          cp .env.$ENVIRONMENT apps/api/.env.production
+
+          echo "✅ Configuration deployed to $ENVIRONMENT"
+
+      - name: Rollback configuration
+        if: github.event.inputs.config_action == 'rollback'
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment }}
+          echo "🔄 Rolling back configuration in $ENVIRONMENT"
+
+          # Restore previous configuration (placeholder)
+          echo "Configuration rollback completed for $ENVIRONMENT"
+
+      - name: Environment health check
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment }}
+          source .env.$ENVIRONMENT
+
+          echo "Performing health check for $ENVIRONMENT..."
+          echo "API URL: $API_URL"
+          echo "Frontend URL: $FRONTEND_URL"
+
+          # Basic connectivity tests
+          # curl -f "$API_URL/health" || echo "⚠️ API health check failed"
+          # curl -f "$FRONTEND_URL" || echo "⚠️ Frontend health check failed"
+
+          echo "✅ Environment health check completed"

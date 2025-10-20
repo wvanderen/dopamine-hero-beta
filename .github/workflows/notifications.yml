@@ -1,0 +1,166 @@
+name: CI/CD Notifications
+
+on:
+  workflow_run:
+    workflows: ["CI Pipeline", "CD - Staging Deployment", "CD - Production Deployment", "Quality Gates and Validation"]
+    types:
+      - completed
+  pull_request:
+    branches: [main]
+    types: [opened, closed, ready_for_review]
+  check_suite:
+    type: [completed]
+
+jobs:
+  send-notifications:
+    name: Send Notifications
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion != 'skipped'
+
+    steps:
+      - name: Determine notification message
+        id: notification
+        run: |
+          WORKFLOW="${{ github.event.workflow_run.name }}"
+          CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+          BRANCH="${{ github.event.workflow_run.head_branch }}"
+
+          case $WORKFLOW in
+            "CI Pipeline")
+              if [[ "$CONCLUSION" == "success" ]]; then
+                MESSAGE="✅ CI Pipeline passed for branch: $BRANCH"
+                EMOJI="🎉"
+              else
+                MESSAGE="❌ CI Pipeline failed for branch: $BRANCH"
+                EMOJI="🚨"
+              fi
+              ;;
+            "CD - Staging Deployment")
+              if [[ "$CONCLUSION" == "success" ]]; then
+                MESSAGE="🚀 Staging deployment completed successfully"
+                EMOJI="✅"
+              else
+                MESSAGE="❌ Staging deployment failed"
+                EMOJI="🚨"
+              fi
+              ;;
+            "CD - Production Deployment")
+              if [[ "$CONCLUSION" == "success" ]]; then
+                MESSAGE="🏭 Production deployment completed successfully"
+                EMOJI="🎉"
+              else
+                MESSAGE="❌ Production deployment failed"
+                EMOJI="🚨"
+              fi
+              ;;
+            "Quality Gates and Validation")
+              if [[ "$CONCLUSION" == "success" ]]; then
+                MESSAGE="🔍 Quality gates passed - PR ready for review"
+                EMOJI="✅"
+              else
+                MESSAGE="❌ Quality gates failed - action required"
+                EMOJI="⚠️"
+              fi
+              ;;
+            *)
+              MESSAGE="Workflow $WORKFLOW completed with status: $CONCLUSION"
+              EMOJI="📋"
+              ;;
+          esac
+
+          echo "message=$EMOJI $MESSAGE" >> $GITHUB_OUTPUT
+          echo "status=$CONCLUSION" >> $GITHUB_OUTPUT
+
+      - name: Send Slack notification
+        if: always()
+        run: |
+          echo "📢 Sending notification to Slack..."
+          echo "Message: ${{ steps.notification.outputs.message }}"
+
+          # Placeholder for actual Slack integration
+          # curl -X POST -H 'Content-type: application/json' \
+          #   --data '{"text":"${{ steps.notification.outputs.message }}"}' \
+          #   ${{ secrets.SLACK_WEBHOOK_URL }}
+
+          echo "Slack notification sent (simulated)"
+
+      - name: Send email notification for failures
+        if: steps.notification.outputs.status == 'failure'
+        run: |
+          echo "📧 Sending failure notification email..."
+          echo "Workflow: ${{ github.event.workflow_run.name }}"
+          echo "Branch: ${{ github.event.workflow_run.head_branch }}"
+          echo "Actor: ${{ github.event.workflow_run.head_commit.author.name }}"
+          echo "Commit: ${{ github.event.workflow_run.head_commit.id }}"
+
+          # Placeholder for email integration
+          echo "Email notification sent (simulated)"
+
+      - name: Update PR status
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const action = context.payload.action;
+
+            let message = '';
+            switch (action) {
+              case 'opened':
+                message = `🔍 PR #${pr.number} opened for review: ${pr.title}`;
+                break;
+              case 'closed':
+                if (pr.merged) {
+                  message = `✅ PR #${pr.number} merged: ${pr.title}`;
+                } else {
+                  message = `❌ PR #${pr.number} closed without merging: ${pr.title}`;
+                }
+                break;
+              case 'ready_for_review':
+                message = `👀 PR #${pr.number} ready for review: ${pr.title}`;
+                break;
+            }
+
+            console.log(message);
+
+      - name: Send build failure notifications
+        if: failure() && github.event.workflow_run.conclusion == 'failure'
+        run: |
+          echo "🚨 Build Failure Notification"
+          echo "Workflow: ${{ github.event.workflow_run.name }}"
+          echo "Branch: ${{ github.event.workflow_run.head_branch }}"
+          echo "Commit: ${{ github.event.workflow_run.head_commit.message }}"
+          echo "Author: ${{ github.event.workflow_run.head_commit.author.name }}"
+          echo ""
+          echo "🔗 View details: ${{ github.event.workflow_run.html_url }}"
+
+      - name: Send deployment success notifications
+        if: contains(github.event.workflow_run.name, 'CD') && github.event.workflow_run.conclusion == 'success'
+        run: |
+          echo "🎉 Deployment Success Notification"
+          if [[ "${{ github.event.workflow_run.name }}" == *"Production"* ]]; then
+            echo "🏭 Production deployment successful!"
+            echo "🌐 Application is now live at: https://dopamine-hero.vercel.app"
+            echo "🔧 API available at: https://api.dopamine-hero.com"
+          else
+            echo "🚀 Staging deployment successful!"
+            echo "🌐 Staging app: https://staging-dopamine-hero.vercel.app"
+            echo "🔧 Staging API: https://api-staging.dopamine-hero.com"
+          fi
+          echo ""
+          echo "📊 Deployed commit: ${{ github.event.workflow_run.head_commit.id }}"
+          echo "👤 Deployed by: ${{ github.event.workflow_run.head_commit.author.name }}"
+
+      - name: Daily summary notification
+        if: github.event.workflow_run.name == 'CI Pipeline' && github.event.workflow_run.head_branch == 'main'
+        run: |
+          echo "📊 Daily CI/CD Summary"
+          echo "=========================="
+          echo "Date: $(date -u +%Y-%m-%d)"
+          echo "Last successful CI: ${{ github.event.workflow_run.created_at }}"
+          echo "Status: ${{ github.event.workflow_run.conclusion }}"
+          echo ""
+          echo "Recent Activity Summary:"
+          echo "- CI Pipeline: ${{ github.event.workflow_run.conclusion }}"
+          echo "- Last commit: ${{ github.event.workflow_run.head_commit.message }}"
+          echo "- Contributors: TBD"

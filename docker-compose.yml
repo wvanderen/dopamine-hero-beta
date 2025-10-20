@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  database:
+    image: postgres:15
+    container_name: dopamine-hero_database
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dopamine_hero
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    networks:
+      - dopamine-hero-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: dopamine-hero_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - dopamine-hero-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  dopamine-hero-network:
+    driver: bridge

@@ -1,0 +1,389 @@
+# Enhanced CI/CD Pipeline with Database Migrations
+# .github/workflows/enhanced-ci.yaml
+
+name: Enhanced CI/CD Pipeline with Database Migrations
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '18'
+  AWS_REGION: 'us-east-1'
+
+jobs:
+  test:
+    name: Test and Quality Checks
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: dopamine_hero_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linting
+        run: npm run lint
+
+      - name: Type checking
+        run: npm run type-check
+
+      - name: Setup test database
+        run: |
+          cd apps/api
+          npm ci
+          npm run db:migrate:test
+          npm run db:seed:test
+
+      - name: Run tests
+        run: npm run test:coverage
+        env:
+          DATABASE_URL: postgresql://postgres:testpassword@localhost:5432/dopamine_hero_test
+          REDIS_URL: redis://localhost:6379
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage/lcov.info
+
+  database-migration-test:
+    name: Test Database Migrations
+    runs-on: ubuntu-latest
+    needs: test
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: dopamine_hero_migration_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test database migrations
+        run: |
+          cd apps/api
+          npm ci
+
+          # Test fresh migration
+          npm run db:migrate:fresh -- --env=test
+
+          # Test migration rollback
+          npm run db:rollback -- --env=test
+          npm run db:migrate -- --env=test
+
+          # Test seed data execution
+          npm run db:seed -- --env=test
+
+          # Validate seed data integrity
+          npm run db:validate-seed -- --env=test
+        env:
+          DATABASE_URL: postgresql://postgres:testpassword@localhost:5432/dopamine_hero_migration_test
+
+      - name: Generate migration documentation
+        run: |
+          cd apps/api
+          npm run db:docs -- --env=test
+          echo "## Migration Summary" >> $GITHUB_STEP_SUMMARY
+          cat docs/migration-summary.md >> $GITHUB_STEP_SUMMARY
+
+  build:
+    name: Build Applications
+    runs-on: ubuntu-latest
+    needs: [test, database-migration-test]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build applications
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: ${{ vars.API_BASE_URL }}
+          NODE_ENV: production
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-artifacts
+          path: |
+            apps/web/dist/
+            apps/api/dist/
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build-artifacts
+
+      - name: Deploy database migrations to staging
+        run: |
+          cd apps/api
+          npm ci
+          npm run db:migrate -- --env=staging
+          npm run db:seed -- --env=staging
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          NODE_ENV: staging
+
+      - name: Deploy frontend to Vercel (Staging)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--preview'
+          working-directory: apps/web
+
+      - name: Deploy backend to ECS (Staging)
+        run: |
+          # Build and push Docker image
+          docker build -f infrastructure/docker/Dockerfile.backend \
+            -t ${{ secrets.AWS_ECR_REPOSITORY }}/dopamine-hero-api:${{ github.sha }} \
+            -t ${{ secrets.AWS_ECR_REPOSITORY }}/dopamine-hero-api:staging \
+            .
+
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ECR_REPOSITORY }}
+          docker push ${{ secrets.AWS_ECR_REPOSITORY }}/dopamine-hero-api:${{ github.sha }}
+          docker push ${{ secrets.AWS_ECR_REPOSITORY }}/dopamine-hero-api:staging
+
+          # Update ECS service
+          aws ecs update-service --cluster dopamine-hero-staging \
+            --service api-service --force-new-deployment
+
+      - name: Run post-deployment smoke tests
+        run: |
+          # Wait for deployment to be ready
+          sleep 60
+
+          # Run smoke tests against staging environment
+          npm run test:smoke -- --env=staging
+        env:
+          STAGING_API_URL: https://staging-api.dopamine-hero.com/v1
+          STAGING_WEB_URL: https://staging.dopamine-hero.com
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create database backup before migration
+        run: |
+          aws rds create-db-snapshot \
+            --db-instance-identifier dopamine-hero-production \
+            --db-snapshot-identifier pre-migration-$(date +%Y%m%d-%H%M%S)
+        continue-on-error: true
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build-artifacts
+
+      - name: Deploy database migrations to production
+        run: |
+          cd apps/api
+          npm ci
+
+          # Run migrations in a safe, monitored way
+          npm run db:migrate -- --env=production --dry-run
+
+          # Manual approval step would go here in a real pipeline
+          npm run db:migrate -- --env=production
+          npm run db:seed -- --env=production
+
+          # Validate production data after migration
+          npm run db:validate -- --env=production
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          NODE_ENV: production
+
+      - name: Deploy frontend to Vercel (Production)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'
+          working-directory: apps/web
+
+      - name: Deploy backend to ECS (Production)
+        run: |
+          # Build and push Docker image
+          docker build -f infrastructure/docker/Dockerfile.backend \
+            -t ${{ secrets.AWS_ECR_REPOSITORY }}/dopamine-hero-api:${{ github.sha }} \
+            -t ${{ secrets.AWS_ECR_REPOSITORY }}/dopamine-hero-api:latest \
+            .
+
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ECR_REPOSITORY }}
+          docker push ${{ secrets.AWS_ECR_REPOSITORY }}/dopamine-hero-api:${{ github.sha }}
+          docker push ${{ secrets.AWS_ECR_REPOSITORY }}/dopamine-hero-api:latest
+
+          # Update ECS service with blue-green deployment
+          aws ecs update-service --cluster dopamine-hero-production \
+            --service api-service --force-new-deployment
+
+      - name: Run post-deployment health checks
+        run: |
+          # Wait for deployment to be ready
+          sleep 120
+
+          # Run comprehensive health checks
+          npm run test:health -- --env=production
+
+          # Run smoke tests against production
+          npm run test:smoke -- --env=production
+        env:
+          PRODUCTION_API_URL: https://api.dopamine-hero.com/v1
+          PRODUCTION_WEB_URL: https://dopamine-hero.com
+
+      - name: Notify deployment success
+        if: success()
+        run: |
+          # Send notification to monitoring system
+          curl -X POST "${{ secrets.WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": "✅ Dopamine Hero deployment to production successful",
+              "commit": "${{ github.sha }}",
+              "branch": "${{ github.ref_name }}",
+              "actor": "${{ github.actor }}"
+            }'
+
+      - name: Notify deployment failure
+        if: failure()
+        run: |
+          # Send notification to monitoring system
+          curl -X POST "${{ secrets.WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": "❌ Dopamine Hero deployment to production FAILED",
+              "commit": "${{ github.sha }}",
+              "branch": "${{ github.ref_name }}",
+              "actor": "${{ github.actor }}",
+              "action": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }'
+
+  rollback-production:
+    name: Rollback Production (Manual)
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: failure() && github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Rollback database migrations
+        run: |
+          cd apps/api
+          npm ci
+          npm run db:rollback -- --env=production --steps=1
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          NODE_ENV: production
+
+      - name: Rollback backend deployment
+        run: |
+          # Deploy previous stable version
+          aws ecs update-service --cluster dopamine-hero-production \
+            --service api-service \
+            --task-definition dopamine-hero-api:previous-stable
+
+      - name: Notify rollback
+        run: |
+          curl -X POST "${{ secrets.WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": "🔄 Dopamine Hero production rollback completed",
+              "commit": "${{ github.sha }}",
+              "branch": "${{ github.ref_name }}",
+              "actor": "${{ github.actor }}"
+            }'

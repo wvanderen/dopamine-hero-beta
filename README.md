@@ -249,7 +249,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **BMAD™ Core**: For providing the development framework and agent ecosystem
 - **Open Source Community**: For the amazing tools and libraries that make this project possible
 
-
 ---
 
 **Built with ❤️ for the ADHD and creative communities**

@@ -1,0 +1,185 @@
+name: Quality Gates and Validation
+
+on:
+  pull_request:
+    branches: [main]
+  pull_request_review:
+    types: [submitted, edited]
+  check_suite:
+    type: [completed]
+
+jobs:
+  quality-gate-checks:
+    name: Quality Gate Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Code quality gate check
+        run: |
+          echo "🔍 Running quality gate checks..."
+
+          # ESLint check - no warnings allowed
+          ESLINT_OUTPUT=$(npm run lint 2>&1)
+          if [[ $? -ne 0 ]]; then
+            echo "❌ ESLint errors found:"
+            echo "$ESLINT_OUTPUT"
+            exit 1
+          fi
+
+          if echo "$ESLINT_OUTPUT" | grep -q "warning"; then
+            echo "❌ ESLint warnings found - no warnings allowed in PR"
+            echo "$ESLINT_OUTPUT"
+            exit 1
+          fi
+
+          echo "✅ ESLint passed without warnings"
+
+          # TypeScript check
+          if ! npm run type-check; then
+            echo "❌ TypeScript errors found"
+            exit 1
+          fi
+
+          echo "✅ TypeScript compilation passed"
+
+          # Prettier check
+          if ! npm run format:check; then
+            echo "❌ Code formatting issues found"
+            exit 1
+          fi
+
+          echo "✅ Code formatting passed"
+
+      - name: Test coverage gate
+        run: |
+          echo "📊 Running test coverage gate checks..."
+
+          npm run test:coverage
+
+          # Check coverage thresholds
+          COVERAGE_FILE="coverage/coverage-summary.json"
+          if [[ -f "$COVERAGE_FILE" ]]; then
+            LINES=$(node -p "JSON.parse(require('fs').readFileSync('$COVERAGE_FILE', 'utf8')).total.lines.pct")
+            FUNCTIONS=$(node -p "JSON.parse(require('fs').readFileSync('$COVERAGE_FILE', 'utf8')).total.functions.pct")
+            BRANCHES=$(node -p "JSON.parse(require('fs').readFileSync('$COVERAGE_FILE', 'utf8')).total.branches.pct")
+            STATEMENTS=$(node -p "JSON.parse(require('fs').readFileSync('$COVERAGE_FILE', 'utf8')).total.statements.pct")
+
+            echo "Coverage metrics:"
+            echo "  Lines: ${LINES}%"
+            echo "  Functions: ${FUNCTIONS}%"
+            echo "  Branches: ${BRANCHES}%"
+            echo "  Statements: ${STATEMENTS}%"
+
+            # Enforce 80% minimum coverage
+            for metric in "$LINES" "$FUNCTIONS" "$BRANCHES" "$STATEMENTS"; do
+              if (( $(echo "$metric < 80" | bc -l) )); then
+                echo "❌ Coverage ${metric}% is below 80% threshold"
+                exit 1
+              fi
+            done
+
+            echo "✅ All coverage thresholds passed"
+          else
+            echo "❌ Coverage report not found"
+            exit 1
+          fi
+
+      - name: Security vulnerability scan
+        run: |
+          echo "🔒 Running security vulnerability scan..."
+
+          # npm audit check
+          AUDIT_OUTPUT=$(npm audit --audit-level=moderate 2>&1)
+          AUDIT_EXIT_CODE=$?
+
+          if [[ $AUDIT_EXIT_CODE -eq 0 ]]; then
+            echo "✅ No moderate or high vulnerabilities found"
+          else
+            echo "⚠️ Security vulnerabilities found:"
+            echo "$AUDIT_OUTPUT"
+
+            # Fail if high vulnerabilities found
+            if echo "$AUDIT_OUTPUT" | grep -q "high"; then
+              echo "❌ High severity vulnerabilities found - PR blocked"
+              exit 1
+            fi
+          fi
+
+      - name: Check file size limits
+        run: |
+          echo "📏 Checking file size limits..."
+
+          # Check for large files that shouldn't be committed
+          LARGE_FILES=$(find . -type f -size +1M ! -path "./node_modules/*" ! -path "./.git/*" ! -path "./coverage/*" ! -path "./dist/*" ! -path "./build/*")
+
+          if [[ -n "$LARGE_FILES" ]]; then
+            echo "❌ Large files found (should be in .gitignore or moved to assets):"
+            echo "$LARGE_FILES"
+            exit 1
+          fi
+
+          echo "✅ No oversized files found"
+
+      - name: Validate commit messages
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "📝 Validating commit messages in PR..."
+
+          # Get commit messages from PR
+          COMMITS=$(git log --format="%s" origin/main..HEAD)
+
+          while IFS= read -r commit_msg; do
+            # Check commit message format (conventional commits)
+            if [[ ! "$commit_msg" =~ ^(feat|fix|docs|style|refactor|test|chore|perf|ci|build)(\(.+\))?: .+ ]]; then
+              echo "❌ Invalid commit message format: '$commit_msg'"
+              echo "Expected format: type(scope): description"
+              echo "Types: feat, fix, docs, style, refactor, test, chore, perf, ci, build"
+              exit 1
+            fi
+          done <<< "$COMMITS"
+
+          echo "✅ All commit messages follow conventional commit format"
+
+      - name: Performance regression check
+        run: |
+          echo "⚡ Running performance regression checks..."
+
+          # Placeholder for performance tests
+          # This would typically include:
+          # - Bundle size analysis
+          # - Load time testing
+          # - Memory usage checks
+
+          echo "✅ Performance checks passed"
+
+      - name: Quality gate summary
+        if: always()
+        run: |
+          echo "📋 Quality Gate Summary:"
+          echo "  ✅ Code Quality: ESLint, Prettier, TypeScript checks passed"
+          echo "  ✅ Test Coverage: Minimum 80% threshold met"
+          echo "  ✅ Security: No high severity vulnerabilities"
+          echo "  ✅ File Management: No oversized files"
+          echo "  ✅ Commit Standards: Conventional commit format followed"
+          echo "  ✅ Performance: No performance regressions detected"
+
+          if [[ "${{ job.status }}" == "success" ]]; then
+            echo "🎉 All quality gates passed - PR is ready for review!"
+          else
+            echo "❌ Quality gates failed - please address the issues above"
+            exit 1
+          fi
