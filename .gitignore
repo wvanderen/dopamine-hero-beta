@@ -1,2 +1,5 @@
 # BMAD (local only)
 .env.*
+node_modules
+jwt-private.pem
+jwt-public.pem

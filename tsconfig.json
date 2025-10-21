@@ -50,8 +50,8 @@
     "tsBuildInfoFile": ".tsbuildinfo",
 
     // Source map options
-    "declaration": false,
-    "declarationMap": false,
+    "declaration": true,
+    "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
 
@@ -59,10 +59,7 @@
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true
   },
-  "include": [
-    "packages/*/src/**/*",
-    "apps/*/src/**/*"
-  ],
+  "include": [],
   "exclude": [
     "node_modules",
     "dist",
